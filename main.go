@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 type User struct {
@@ -11,35 +12,69 @@ type User struct {
 	Name string `json:"name"`
 }
 
-type Request struct {
+type Route struct {
 	Method func(w http.ResponseWriter, r *http.Request)
 	Path   string
 }
 
+var users = []User{
+	{ID: 1, Name: "Alice"},
+	{ID: 2, Name: "Bob"},
+	{ID: 3, Name: "Charlie"},
+}
+
 func helloHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello, World!")
+	fmt.Fprint(w, "Hello, World!")
+}
+
+func getUserByIDHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	for _, user := range users {
+		if user.ID == id {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(user)
+			return
+		}
+	}
+
+	http.Error(w, "user not found", http.StatusNotFound)
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
-	users := []User{
-		{ID: 1, Name: "Alice"},
-		{ID: 2, Name: "Bob"},
-		{ID: 3, Name: "Charlie"},
+	usersLen := len(users)
+
+	limit := r.URL.Query().Get("limit")
+	limitInt := usersLen
+	if limit != "" {
+		var err error
+		limitInt, err = strconv.Atoi(limit)
+		if err != nil || limitInt <= 0 || limitInt > usersLen {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
 	}
 
+	resultUsers := users[0:limitInt]
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(resultUsers)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello, World!")
+	fmt.Fprint(w, "OK")
 }
 
 func main() {
-	handlers := []Request{
-		{helloHandler, "/"},
-		{usersHandler, "/users"},
-		{healthHandler, "/health"},
+	handlers := []Route{
+		{helloHandler, "GET /"},
+		{usersHandler, "GET /users"},
+		{getUserByIDHandler, "GET /users/{id}"},
+		{healthHandler, "GET /health"},
 	}
 	port := ":8080"
 	mux := http.NewServeMux()
