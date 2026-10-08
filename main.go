@@ -29,19 +29,20 @@ func createUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usersMu.Lock()
+	func() {
+		usersMu.Lock()
+		defer usersMu.Unlock()
 
-	lastUserID := 0
-	usersLen := len(users)
+		lastUserID := 0
+		usersLen := len(users)
 
-	if usersLen > 0 {
-		lastUserID = users[usersLen-1].ID
-	}
+		if usersLen > 0 {
+			lastUserID = users[usersLen-1].ID
+		}
 
-	user.ID = lastUserID + 1
-	users = append(users, user)
-
-	usersMu.Unlock()
+		user.ID = lastUserID + 1
+		users = append(users, user)
+	}()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
