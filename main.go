@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
+	"sync"
 )
 
 type User struct {
@@ -12,78 +12,50 @@ type User struct {
 	Name string `json:"name"`
 }
 
-type Route struct {
-	Method func(w http.ResponseWriter, r *http.Request)
-	Path   string
-}
+var (
+	users []User = []User{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+		{ID: 3, Name: "Charlie"},
+	}
+	usersMu sync.Mutex
+)
 
-var users = []User{
-	{ID: 1, Name: "Alice"},
-	{ID: 2, Name: "Bob"},
-	{ID: 3, Name: "Charlie"},
-}
+func createUserHandler(w http.ResponseWriter, r *http.Request) {
+	var user User
 
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "Hello, World!")
-}
-
-func getUserByIDHandler(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "invalid user ID", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	for _, user := range users {
-		if user.ID == id {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(user)
-			return
-		}
-	}
+	usersMu.Lock()
 
-	http.Error(w, "user not found", http.StatusNotFound)
-}
-
-func usersHandler(w http.ResponseWriter, r *http.Request) {
+	lastUserID := 0
 	usersLen := len(users)
 
-	limit := r.URL.Query().Get("limit")
-	limitInt := usersLen
-	if limit != "" {
-		var err error
-		limitInt, err = strconv.Atoi(limit)
-		if err != nil || limitInt <= 0 || limitInt > usersLen {
-			http.Error(w, "invalid limit", http.StatusBadRequest)
-			return
-		}
+	if usersLen > 0 {
+		lastUserID = users[usersLen-1].ID
 	}
 
-	resultUsers := users[0:limitInt]
+	user.ID = lastUserID + 1
+	users = append(users, user)
+
+	usersMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resultUsers)
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "OK")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(user)
 }
 
 func main() {
-	handlers := []Route{
-		{helloHandler, "GET /"},
-		{usersHandler, "GET /users"},
-		{getUserByIDHandler, "GET /users/{id}"},
-		{healthHandler, "GET /health"},
-	}
 	port := ":8080"
 	mux := http.NewServeMux()
 
-	for _, handler := range handlers {
-		mux.HandleFunc(handler.Path, handler.Method)
-	}
+	mux.HandleFunc("POST /users", createUserHandler)
 
 	fmt.Printf("Server started on %s\n", port)
+
 	if err := http.ListenAndServe(port, mux); err != nil {
 		panic(err)
 	}
