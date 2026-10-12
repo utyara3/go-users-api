@@ -41,6 +41,21 @@ func getUsersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func createUser(user *User) {
+	usersMu.Lock()
+	defer usersMu.Unlock()
+
+	lastUserID := 0
+	usersLen := len(users)
+
+	if usersLen > 0 {
+		lastUserID = users[usersLen-1].ID
+	}
+
+	user.ID = lastUserID + 1
+	users = append(users, *user)
+}
+
 func createUserHandler(w http.ResponseWriter, r *http.Request) {
 	var user User
 
@@ -49,20 +64,7 @@ func createUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	func() {
-		usersMu.Lock()
-		defer usersMu.Unlock()
-
-		lastUserID := 0
-		usersLen := len(users)
-
-		if usersLen > 0 {
-			lastUserID = users[usersLen-1].ID
-		}
-
-		user.ID = lastUserID + 1
-		users = append(users, user)
-	}()
+	createUser(&user)
 
 	setContentTypeJSON(w)
 	w.WriteHeader(http.StatusCreated)
