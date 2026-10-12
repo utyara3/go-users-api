@@ -106,6 +106,11 @@ func editUserHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(req)
 }
 
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "OK\n")
+}
+
 func main() {
 	port := ":8080"
 	mux := http.NewServeMux()
@@ -113,6 +118,7 @@ func main() {
 	mux.HandleFunc("GET /users", getUsersHandler)
 	mux.HandleFunc("POST /users", createUserHandler)
 	mux.HandleFunc("PATCH /users/{id}", editUserHandler)
+	mux.HandleFunc("GET /health", healthHandler)
 
 	fmt.Printf("Server started on %s\n", port)
 
