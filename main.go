@@ -1,15 +1,20 @@
 package main
 
 import (
+	// "encoding/json"
 	"encoding/json"
 	"fmt"
 	"net/http"
 )
 
+type HealthStatus struct {
+	Status string `json:"status"`
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(HealthStatus{Status: "unavailable"})
 }
 
 func main() {
