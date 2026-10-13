@@ -22,6 +22,8 @@
         ];
 
         shellHook = ''
+          alias dcu="docker compose up"
+          alias dcd="docker compose down"
           echo "Go development environment loaded!"
           go version
         '';
