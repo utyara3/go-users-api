@@ -19,3 +19,9 @@ run: vet
 
 prod: test
 	go build
+
+dcu: 
+	docker compose up
+
+dcd:
+	docker compose down
