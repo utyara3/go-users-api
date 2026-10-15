@@ -1,30 +1,86 @@
 package main
 
 import (
-	// "encoding/json"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type HealthStatus struct {
-	Status string `json:"status"`
+type User struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+type Server struct {
+	db *pgxpool.Pool
+}
+
+func GetUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (User, error) {
+	var user User
+	err := pool.QueryRow(ctx, "SELECT id, name FROM users WHERE id = $1", id).Scan(&user.ID, &user.Name)
+	if err != nil {
+		return User{}, err
+	}
+
+	return user, nil
+}
+
+func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	userID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	user, err := GetUserByID(ctx, s.db, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	json.NewEncoder(w).Encode(HealthStatus{Status: "unavailable"})
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(user)
 }
 
 func main() {
+	ctx := context.Background()
+
+	pool, err := NewDB(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		return
+	}
+
+	defer pool.Close()
+
+	fmt.Println("Connected to PostgreSQL")
+
 	port := ":8080"
+	srv := &Server{db: pool}
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
 
-	fmt.Printf("Server started on %s\n", port)
+	log.Printf("Сервер запущен на %s", port)
 	if err := http.ListenAndServe(port, mux); err != nil {
-		panic(err)
+		log.Printf("Server error: %v", err)
+		return
 	}
 }
