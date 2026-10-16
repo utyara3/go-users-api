@@ -20,13 +20,21 @@ type User struct {
 	Name string `json:"name"`
 }
 
-type Server struct {
+type PostgresUsers struct {
 	db *pgxpool.Pool
 }
 
-func GetUserByID(ctx context.Context, pool *pgxpool.Pool, id int64) (User, error) {
+type Server struct {
+	users UserGetter
+}
+
+type UserGetter interface {
+	GetUserByID(ctx context.Context, id int64) (User, error)
+}
+
+func (p *PostgresUsers) GetUserByID(ctx context.Context, id int64) (User, error) {
 	var user User
-	err := pool.QueryRow(ctx, "SELECT id, name FROM users WHERE id = $1", id).Scan(&user.ID, &user.Name)
+	err := p.db.QueryRow(ctx, "SELECT id, name FROM users WHERE id = $1", id).Scan(&user.ID, &user.Name)
 	if err != nil {
 		return User{}, err
 	}
@@ -39,12 +47,12 @@ func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	userID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	if err != nil || userID <= 0 {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	user, err := GetUserByID(ctx, s.db, userID)
+	user, err := s.users.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "User not found", http.StatusNotFound)
@@ -55,7 +63,6 @@ func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(user)
 }
 
@@ -73,7 +80,8 @@ func main() {
 	fmt.Println("Connected to PostgreSQL")
 
 	port := ":8080"
-	srv := &Server{db: pool}
+	users := &PostgresUsers{db: pool}
+	srv := &Server{users: users}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
