@@ -23,10 +23,11 @@ func main() {
 
 	port := ":8080"
 	users := &PostgresUsers{db: pool}
-	srv := &Server{users: users}
+	srv := &Server{userGet: users, userCreate: users}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
+	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
 
 	log.Printf("Сервер запущен на %s", port)
 	if err := http.ListenAndServe(port, mux); err != nil {
