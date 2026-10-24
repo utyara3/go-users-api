@@ -7,9 +7,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type Server struct {
@@ -45,7 +44,7 @@ func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 
 	user, err := srv.usersRepo.GetByID(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, ErrUserNotFound) {
 			sendJSONError(w, "User not found", http.StatusNotFound)
 			return
 		}
@@ -64,6 +63,11 @@ func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) 
 	var req CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendJSONError(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		sendJSONError(w, "Name is empty", http.StatusBadRequest)
 		return
 	}
 
