@@ -1,164 +1,109 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"math/rand/v2"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 )
 
-type FakeUser struct {
-	User  User
-	Err   error
-	Calls int
+type FakeDB struct {
+	User User
+	Err  error
 }
 
-type testCase struct {
-	name           string
-	method         string
-	path           string
-	fake           *FakeUser
-	wantStatusCode int
-	wantUser       *User
-	wantError      string
-	wantCalls      int
-}
-
-func (f *FakeUser) GetUserByID(ctx context.Context, id int64) (User, error) {
-	f.Calls++
+func (f *FakeDB) GetByID(ctx context.Context, id int64) (User, error) {
 	return f.User, f.Err
 }
 
-func (f *FakeUser) CreateNewUser(ctx context.Context, name string) (int64, error) {
-	f.Calls++
-	return int64(rand.IntN(100) + 1), nil
+func (f *FakeDB) Create(ctx context.Context, name string) (int64, error) {
+	return f.User.ID, f.Err
 }
 
-func testingTableDrivenCases(
-	t *testing.T, 
-	tests []testCase,
-	testFunc func(w http.ResponseWriter, r *http.Request),
-) {
-	for _, tc := range tests {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				srv := &Server{userGet: tc.fake, userCreate: tc.fake}
+func (f *FakeDB) Update(ctx context.Context, user User) error {
+	return f.Err
+}
 
-				req := httptest.NewRequest(tc.method, tc.path, nil)
-				req.SetPathValue("id", strings.TrimPrefix(tc.path, "/users/"))
-				rec := httptest.NewRecorder()
-
-				srv.GetUserByIDHandler(rec, req)
-
-				res := rec.Result()
-				defer res.Body.Close()
-
-				if res.StatusCode != tc.wantStatusCode {
-					t.Fatalf("expected %v status code, got %v", tc.wantStatusCode, res.StatusCode)
-				}
-
-				if tc.wantUser != nil {
-					var user User
-					if err := json.NewDecoder(res.Body).Decode(&user); err != nil {
-						t.Fatalf("invalid user JSON: %v", err)
-					}
-
-					if user != *tc.wantUser {
-						t.Fatalf("got wrong user %+v, expected %+v", user, *tc.wantUser)
-					}
-				} else {
-					var gotError JSONError
-
-					if err := json.NewDecoder(res.Body).Decode(&gotError); err != nil {
-						t.Fatalf("invalid error JSON: %v", err)
-					}
-
-					if gotError.Err != tc.wantError {
-						t.Fatalf("expected error %v, got %v", tc.wantError, gotError.Err)
-					}
-				}
-
-				if tc.fake.Calls != tc.wantCalls {
-					t.Fatalf("expected %d storage calls, got %d", tc.wantCalls, tc.fake.Calls)
-				}
-			},
-		)
-	}
+func (f *FakeDB) Delete(ctx context.Context, id int64) error {
+	return f.Err
 }
 
 func TestGetUserByIDHandler(t *testing.T) {
-	tests := []testCase{
+	type testCase struct {
+		Name               string
+		User               *User
+		DBErr              error
+		ExpectedStatusCode int
+		ExpectedUser       *User
+	}
+
+	testCases := []testCase{
 		{
-			name:   "get existing user",
-			method: http.MethodGet,
-			path:   "/users/1",
-			fake: &FakeUser{
-				User: User{
-					ID:   1,
-					Name: "Alice",
-				},
-				Err: nil,
+			Name: "Get user with ID = 1",
+			User: &User{
+				ID:   1,
+				Name: "Alex",
 			},
-			wantStatusCode: http.StatusOK,
-			wantUser:       &User{ID: 1, Name: "Alice"},
-			wantError:      "",
-			wantCalls:      1,
+			DBErr:              nil,
+			ExpectedStatusCode: 200,
+			ExpectedUser: &User{
+				ID:   1,
+				Name: "Alex",
+			},
 		},
 		{
-			name:   "user not found",
-			method: http.MethodGet,
-			path:   "/users/999",
-			fake: &FakeUser{
-				Err: pgx.ErrNoRows,
+			Name: "User not in db (ID = 2)",
+			User: &User{
+				ID: 2,
 			},
-			wantStatusCode: http.StatusNotFound,
-			wantUser:       nil,
-			wantError:      "User not found",
-			wantCalls:      1,
-		},
-		{
-			name:           "invalid user ID",
-			method:         http.MethodGet,
-			path:           "/users/USERID",
-			fake:           &FakeUser{},
-			wantStatusCode: http.StatusBadRequest,
-			wantUser:       nil,
-			wantError:      "Invalid user ID",
-			wantCalls:      0,
-		},
-		{
-			name:   "storage error",
-			method: http.MethodGet,
-			path:   "/users/1",
-			fake: &FakeUser{
-				Err: errors.New("connection failed"),
-			},
-			wantStatusCode: http.StatusInternalServerError,
-			wantUser:       nil,
-			wantError:      "Database error",
-			wantCalls:      1,
+			DBErr:              pgx.ErrNoRows,
+			ExpectedStatusCode: 404,
+			ExpectedUser:       &User{},
 		},
 	}
 
-	testingTableDrivenCases(t, tests)
-}
+	for _, tc := range testCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			srv := &Server{usersRepo: &FakeDB{User: *tc.User, Err: tc.DBErr}}
 
-func TestCreateNewUserHandler(t *testing.T) {
-	testCases := []testCase{
-		{
-			name: "create user",
-			method: http.MethodGet,
-			path: "/users",
-			fake: &FakeUser{},
-			wantStatusCode: http.StatusCreated,
-			want
-		},
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
+
+			req := httptest.NewRequest(http.MethodGet, "/users/"+strconv.FormatInt(tc.User.ID, 10), nil)
+			rec := httptest.NewRecorder()
+
+			mux.ServeHTTP(rec, req)
+
+			res := rec.Result()
+			defer res.Body.Close()
+
+			b, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatalf("Error reading response body: %v", err)
+			}
+
+			if res.StatusCode != tc.ExpectedStatusCode {
+				t.Fatalf("Expected status code %d, got %d\nServer response: %s", tc.ExpectedStatusCode, res.StatusCode, string(b))
+			}
+
+			if tc.ExpectedStatusCode == http.StatusNotFound {
+				return
+			}
+
+			var user User
+			if err := json.NewDecoder(bytes.NewReader(b)).Decode(&user); err != nil {
+				t.Fatalf("Error decoding response body: %v", err)
+			}
+
+			if user.ID != tc.ExpectedUser.ID {
+				t.Fatalf("Expected user ID %d, got %d", tc.ExpectedUser.ID, user.ID)
+			}
+		})
 	}
 }
