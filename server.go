@@ -13,8 +13,7 @@ import (
 )
 
 type Server struct {
-	userGet    UserGetter
-	userCreate UserCreator
+	usersRepo UserRepository
 }
 
 type JSONError struct {
@@ -32,7 +31,7 @@ func sendJSONError(w http.ResponseWriter, message string, code int) {
 	}
 }
 
-func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	userID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -44,7 +43,7 @@ func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	user, err := s.userGet.GetUserByID(ctx, userID)
+	user, err := srv.usersRepo.GetByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			sendJSONError(w, "User not found", http.StatusNotFound)
@@ -59,7 +58,7 @@ func (s *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var req CreateUserRequest
@@ -71,7 +70,7 @@ func (s *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	userID, err := s.userCreate.CreateNewUser(ctx, req.Name)
+	userID, err := srv.usersRepo.Create(ctx, req.Name)
 	if err != nil {
 		sendJSONError(w, "Database error", http.StatusInternalServerError)
 		return
