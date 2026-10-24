@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -13,25 +16,48 @@ func main() {
 
 	pool, err := NewDB(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		return
+		log.Fatalf("DB Error: %v", err)
 	}
-
 	defer pool.Close()
 
-	fmt.Println("Connected to PostgreSQL")
-
-	port := ":8080"
 	usersRepo := &PostgresUsers{db: pool}
 	srv := &Server{usersRepo: usersRepo}
+
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
-	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
 
-	log.Printf("Сервер запущен на %s", port)
-	if err := http.ListenAndServe(port, mux); err != nil {
-		log.Printf("Server error: %v", err)
-		return
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
 	}
+	serverErr := make(chan error, 1)
+
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	shutdownCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Server error: %v", err)
+		}
+	case <-shutdownCtx.Done():
+		log.Println("Shutdown signal received")
+	}
+
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(cancelCtx); err != nil {
+		log.Printf("Server shutdown error: %v\n", err)
+
+		if err := server.Close(); err != nil {
+			log.Printf("Server close error: %v\n", err)
+		}
+	}
+
+	log.Println("Server stopped")
 }
