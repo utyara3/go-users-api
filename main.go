@@ -22,8 +22,8 @@ func main() {
 	fmt.Println("Connected to PostgreSQL")
 
 	port := ":8080"
-	users := &PostgresUsers{db: pool}
-	srv := &Server{userGet: users, userCreate: users}
+	usersRepo := &PostgresUsers{db: pool}
+	srv := &Server{usersRepo: usersRepo}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
