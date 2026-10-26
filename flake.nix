@@ -20,6 +20,8 @@
           golangci-lint
           gnumake
 
+          httpie
+
           (writeShellScriptBin "dcu" "exec docker compose up \"$@\"")
           (writeShellScriptBin "dcd" "exec docker compose down \"$@\"")
         ];
