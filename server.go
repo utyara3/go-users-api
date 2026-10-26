@@ -23,6 +23,10 @@ type CreateUserRequest struct {
 	Name string `json:"name"`
 }
 
+type ChangeUserNameRequest struct {
+	Name string `json:"name"`
+}
+
 func sendJSONError(w http.ResponseWriter, message string, code int) {
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(JSONError{Err: message}); err != nil {
@@ -86,4 +90,61 @@ func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(user); err != nil {
 		log.Printf("encoding user response error: %v", err)
 	}
+}
+
+func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var req ChangeUserNameRequest
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendJSONError(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		sendJSONError(w, "Name is empty", http.StatusBadRequest)
+		return
+	}
+
+	updatedUser, err := srv.usersRepo.Update(r.Context(), User{ID: id, Name: req.Name})
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			sendJSONError(w, "User not found", http.StatusNotFound)
+			return
+		}
+		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(updatedUser); err != nil {
+		log.Printf("encoding user response error: %v", err)
+	}
+}
+
+func (srv *Server) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	if err := srv.usersRepo.Delete(ctx, id); err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			sendJSONError(w, "User not found", http.StatusNotFound)
+			return
+		}
+		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
