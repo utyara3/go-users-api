@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrDBNotFound error = errors.New("database not found")
 
 func NewDB(ctx context.Context) (*pgxpool.Pool, error) {
 	/*
@@ -15,7 +19,11 @@ func NewDB(ctx context.Context) (*pgxpool.Pool, error) {
 		5432 - port
 		/app - db name
 	*/
-	connString := "postgres://app:secret@localhost:5432/app"
+	// connString := "postgres://app:secret@localhost:5432/app"
+	connString := os.Getenv("DATABASE_URL")
+	if connString == "" {
+		return nil, fmt.Errorf("%w: %v", ErrDBNotFound, connString)
+	}
 
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
