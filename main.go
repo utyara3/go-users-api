@@ -25,6 +25,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
+	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
+	mux.HandleFunc("PUT /users/{id}", srv.ChangeUserNameHandler)
+	mux.HandleFunc("DELETE /users/{id}", srv.DeleteUserHandler)
 
 	server := &http.Server{
 		Addr:    ":8080",
@@ -33,6 +36,7 @@ func main() {
 	serverErr := make(chan error, 1)
 
 	go func() {
+		log.Println("Starting server on port 8080")
 		serverErr <- server.ListenAndServe()
 	}()
 
