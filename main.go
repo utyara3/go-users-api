@@ -23,15 +23,9 @@ func main() {
 	usersRepo := &PostgresUsers{db: pool}
 	srv := &Server{usersRepo: usersRepo}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
-	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
-	mux.HandleFunc("PUT /users/{id}", srv.ChangeUserNameHandler)
-	mux.HandleFunc("DELETE /users/{id}", srv.DeleteUserHandler)
-
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: newMux(srv),
 	}
 	serverErr := make(chan error, 1)
 
