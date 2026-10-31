@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := run
 
-.PHONY: fmt vet build all
+.PHONY: fmt vet build test test-integration run prod
 
 fmt: 
 	go fmt ./...
@@ -10,6 +10,10 @@ vet: fmt
 
 test: vet
 	go test -v -race ./...
+
+# Requires a running postgres
+test-integration: vet
+	go test -v -race -run Integration ./...
 
 build: vet
 	go build
