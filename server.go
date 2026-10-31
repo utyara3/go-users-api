@@ -27,6 +27,15 @@ type ChangeUserNameRequest struct {
 	Name string `json:"name"`
 }
 
+func newMux(srv *Server) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
+	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
+	mux.HandleFunc("PUT /users/{id}", srv.ChangeUserNameHandler)
+	mux.HandleFunc("DELETE /users/{id}", srv.DeleteUserHandler)
+	return mux
+}
+
 func sendJSONError(w http.ResponseWriter, message string, code int) {
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(JSONError{Err: message}); err != nil {
@@ -78,13 +87,14 @@ func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	userID, err := srv.usersRepo.Create(ctx, req.Name)
+	name := strings.TrimSpace(req.Name)
+	userID, err := srv.usersRepo.Create(ctx, name)
 	if err != nil {
 		sendJSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	user := User{ID: int64(userID), Name: req.Name}
+	user := User{ID: userID, Name: name}
 
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(user); err != nil {
@@ -112,7 +122,10 @@ func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	updatedUser, err := srv.usersRepo.Update(r.Context(), User{ID: id, Name: req.Name})
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	updatedUser, err := srv.usersRepo.Update(ctx, User{ID: id, Name: strings.TrimSpace(req.Name)})
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			sendJSONError(w, "User not found", http.StatusNotFound)
