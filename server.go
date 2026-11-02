@@ -36,16 +36,23 @@ func newMux(srv *Server) *http.ServeMux {
 	return mux
 }
 
-func sendJSONError(w http.ResponseWriter, message string, code int) {
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(JSONError{Err: message}); err != nil {
+	if v == nil {
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("encoding response error: %v", err)
 	}
 }
 
-func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func sendJSONError(w http.ResponseWriter, message string, code int) {
+	writeJSON(w, code, JSONError{Err: message})
+}
 
+func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 	userID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || userID <= 0 {
 		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
@@ -65,14 +72,10 @@ func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := json.NewEncoder(w).Encode(user); err != nil {
-		log.Printf("encoding user response error: %v", err)
-	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	var req CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendJSONError(w, "invalid JSON", http.StatusBadRequest)
@@ -96,15 +99,10 @@ func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) 
 
 	user := User{ID: userID, Name: name}
 
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(user); err != nil {
-		log.Printf("encoding user response error: %v", err)
-	}
+	writeJSON(w, http.StatusCreated, user)
 }
 
 func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
@@ -135,9 +133,7 @@ func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := json.NewEncoder(w).Encode(updatedUser); err != nil {
-		log.Printf("encoding user response error: %v", err)
-	}
+	writeJSON(w, http.StatusOK, updatedUser)
 }
 
 func (srv *Server) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -159,5 +155,5 @@ func (srv *Server) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusNoContent, nil)
 }
