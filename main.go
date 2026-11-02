@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	ctx := context.Background()
 
 	pool, err := NewDB(ctx)
@@ -40,7 +47,7 @@ func main() {
 	select {
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Server error: %v", err)
+			return fmt.Errorf("Server error: %w", err)
 		}
 	case <-shutdownCtx.Done():
 		log.Println("Shutdown signal received")
@@ -58,4 +65,6 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+
+	return nil
 }
