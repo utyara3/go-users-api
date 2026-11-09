@@ -31,8 +31,10 @@ func run() error {
 	srv := &Server{usersRepo: usersRepo}
 
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: newMux(srv),
+		Addr:              "0.0.0.0:8080",
+		Handler:           newMux(srv),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	serverErr := make(chan error, 1)
 
