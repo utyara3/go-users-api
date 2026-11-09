@@ -29,6 +29,7 @@ type ChangeUserNameRequest struct {
 
 func newMux(srv *Server) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", srv.APIHealthCheckHandler)
 	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
 	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
 	mux.HandleFunc("PUT /users/{id}", srv.ChangeUserNameHandler)
@@ -50,6 +51,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func sendJSONError(w http.ResponseWriter, message string, code int) {
 	writeJSON(w, code, JSONError{Err: message})
+}
+
+func (srv *Server) APIHealthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
