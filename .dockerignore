@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+main
+*.test
+postgres_data/
+README.md
+flake.nix
+flake.lock
+.direnv/
