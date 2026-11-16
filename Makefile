@@ -2,7 +2,7 @@
 
 .PHONY: fmt vet build test test-integration run prod
 
-fmt: 
+fmt:
 	go fmt ./...
 
 vet: fmt
@@ -19,8 +19,7 @@ build: vet
 	go build
 
 run: vet
-	go run ./main.go
+	go run .
 
 prod: test
 	go build
-
