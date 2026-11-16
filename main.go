@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,17 +13,22 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	logger := newLogger()
+
+	if err := run(logger); err != nil {
+		logger.Error("application terminated", "error", err)
+		os.Exit(1)
 	}
 }
 
-func run() error {
-	ctx := context.Background()
+func run(logger *slog.Logger) error {
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
+	ctx := context.Background()
 	pool, err := NewDB(ctx)
 	if err != nil {
-		log.Fatalf("DB Error: %v", err)
+		return fmt.Errorf("initialize database pool: %w", err)
 	}
 	defer pool.Close()
 
@@ -39,12 +44,9 @@ func run() error {
 	serverErr := make(chan error, 1)
 
 	go func() {
-		log.Println("Starting server on port 8080")
+		logger.Info("starting HTTP server", "addr", server.Addr)
 		serverErr <- server.ListenAndServe()
 	}()
-
-	shutdownCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	select {
 	case err := <-serverErr:
@@ -52,21 +54,23 @@ func run() error {
 			return fmt.Errorf("Server error: %w", err)
 		}
 	case <-shutdownCtx.Done():
-		log.Println("Shutdown signal received")
+		logger.Info("Shutdown signal received")
 	}
 
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(cancelCtx); err != nil {
-		log.Printf("Server shutdown error: %v\n", err)
-
-		if err := server.Close(); err != nil {
-			log.Printf("Server close error: %v\n", err)
+	if shutdownErr := server.Shutdown(cancelCtx); shutdownErr != nil {
+		if closeErr := server.Close(); closeErr != nil {
+			return errors.Join(
+				fmt.Errorf("graceful shutdown %w", shutdownErr),
+				fmt.Errorf("force close: %w", closeErr),
+			)
 		}
+		return fmt.Errorf("graceful shutdown: %w", shutdownErr)
 	}
 
-	log.Println("Server stopped")
+	logger.Info("Server stopped")
 
 	return nil
 }
