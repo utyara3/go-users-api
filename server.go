@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-type Server struct {
-	usersRepo UserRepository
-}
-
 type JSONError struct {
 	Err string `json:"error"`
 }
