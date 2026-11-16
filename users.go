@@ -9,11 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type User struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
 type PostgresUsers struct {
 	db *pgxpool.Pool
 }
