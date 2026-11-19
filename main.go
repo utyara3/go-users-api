@@ -35,7 +35,7 @@ func run(logger *slog.Logger) error {
 	usersRepo := &PostgresUsers{db: pool}
 	usersService := &UserService{userRepo: usersRepo}
 
-	srv := &Server{userService: usersService}
+	srv := &Server{userService: usersService, logger: logger}
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:8080",
