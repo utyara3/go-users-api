@@ -1,15 +1,21 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
-	"time"
 )
+
+type User struct {
+	ID   int64
+	Name string
+}
+
+type Server struct {
+	userService userService
+}
 
 type JSONError struct {
 	Err string `json:"error"`
@@ -23,12 +29,17 @@ type ChangeUserNameRequest struct {
 	Name string `json:"name"`
 }
 
+type userResponse struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 func newMux(srv *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", srv.APIHealthCheckHandler)
-	mux.HandleFunc("GET /users/{id}", srv.GetUserByIDHandler)
+	mux.HandleFunc("GET /users/{id}", srv.GetUserHandler)
 	mux.HandleFunc("POST /users", srv.CreateNewUserHandler)
-	mux.HandleFunc("PUT /users/{id}", srv.ChangeUserNameHandler)
+	mux.HandleFunc("PUT /users/{id}", srv.UpdateUserHandler)
 	mux.HandleFunc("DELETE /users/{id}", srv.DeleteUserHandler)
 	return mux
 }
@@ -49,31 +60,37 @@ func sendJSONError(w http.ResponseWriter, message string, code int) {
 	writeJSON(w, code, JSONError{Err: message})
 }
 
+func writeUser(w http.ResponseWriter, code int, user *User) {
+	writeJSON(w, code, userResponse{ID: user.ID, Name: user.Name})
+}
+
 func (srv *Server) APIHealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (srv *Server) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 	userID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || userID <= 0 {
+	if err != nil {
 		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
+	input := GetUserInput{ID: userID}
 
-	user, err := srv.usersRepo.GetByID(ctx, userID)
+	user, err := srv.userService.Get(r.Context(), input)
 	if err != nil {
+
 		if errors.Is(err, ErrUserNotFound) {
 			sendJSONError(w, "User not found", http.StatusNotFound)
-			return
+		} else if errors.Is(err, ErrWrongUserID) {
+			sendJSONError(w, "Wrong user ID", http.StatusBadRequest)
+		} else {
+			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
 		}
-		sendJSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user)
+	writeUser(w, http.StatusOK, user)
 }
 
 func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -83,27 +100,22 @@ func (srv *Server) CreateNewUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if strings.TrimSpace(req.Name) == "" {
-		sendJSONError(w, "Name is empty", http.StatusBadRequest)
-		return
-	}
+	input := CreateUserInput{Name: req.Name}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-
-	name := strings.TrimSpace(req.Name)
-	userID, err := srv.usersRepo.Create(ctx, name)
+	user, err := srv.userService.Create(r.Context(), input)
 	if err != nil {
-		sendJSONError(w, "Database error", http.StatusInternalServerError)
+		if errors.Is(err, ErrWrongUserName) {
+			sendJSONError(w, "Wrong user name", http.StatusBadRequest)
+		} else {
+			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
 
-	user := User{ID: userID, Name: name}
-
-	writeJSON(w, http.StatusCreated, user)
+	writeUser(w, http.StatusCreated, user)
 }
 
-func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		sendJSONError(w, "Invalid user ID", http.StatusBadRequest)
@@ -116,25 +128,25 @@ func (srv *Server) ChangeUserNameHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if strings.TrimSpace(req.Name) == "" {
-		sendJSONError(w, "Name is empty", http.StatusBadRequest)
-		return
-	}
+	input := UpdateUserInput{ID: id, Name: req.Name}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-
-	updatedUser, err := srv.usersRepo.Update(ctx, User{ID: id, Name: strings.TrimSpace(req.Name)})
+	updatedUser, err := srv.userService.Update(r.Context(), input)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		switch {
+		case errors.Is(err, ErrWrongUserID):
+			sendJSONError(w, "Wrong user ID", http.StatusBadRequest)
+		case errors.Is(err, ErrWrongUserName):
+			sendJSONError(w, "Wrong user name", http.StatusBadRequest)
+		case errors.Is(err, ErrUserNotFound):
 			sendJSONError(w, "User not found", http.StatusNotFound)
-			return
+		default:
+			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
 		}
-		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+
 		return
 	}
 
-	writeJSON(w, http.StatusOK, updatedUser)
+	writeUser(w, http.StatusOK, updatedUser)
 }
 
 func (srv *Server) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -144,15 +156,15 @@ func (srv *Server) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
+	input := DeleteUserInput{ID: id}
 
-	if err := srv.usersRepo.Delete(ctx, id); err != nil {
+	if err := srv.userService.Delete(r.Context(), input); err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			sendJSONError(w, "User not found", http.StatusNotFound)
-			return
+		} else {
+			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
 		}
-		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+
 		return
 	}
 
