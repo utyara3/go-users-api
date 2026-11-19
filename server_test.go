@@ -1,46 +1,62 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// FakeDB is an in-memory UserRepository. It lets us test HTTP handlers without
-// touching PostgreSQL.
 type FakeDB struct {
 	User     User
 	CreateID int64
 	Err      error
 }
 
-func (f *FakeDB) GetByID(ctx context.Context, id int64) (User, error) {
+func (f *FakeDB) Get(ctx context.Context, id int64) (*User, error) {
 	if f.Err != nil {
-		return User{}, f.Err
+		return nil, f.Err
 	}
 
-	return f.User, nil
+	user := f.User
+	return &user, nil
 }
 
-func (f *FakeDB) Create(ctx context.Context, name string) (int64, error) {
-	return f.CreateID, f.Err
-}
-
-func (f *FakeDB) Update(ctx context.Context, user User) (User, error) {
+func (f *FakeDB) Create(ctx context.Context, name string) (*User, error) {
 	if f.Err != nil {
-		return User{}, f.Err
+		return nil, f.Err
 	}
 
-	return f.User, nil
+	return &User{ID: f.CreateID, Name: name}, nil
+}
+
+func (f *FakeDB) Update(ctx context.Context, id int64, name string) (*User, error) {
+	if f.Err != nil {
+		return nil, f.Err
+	}
+
+	user := User{ID: id, Name: name}
+	return &user, nil
 }
 
 func (f *FakeDB) Delete(ctx context.Context, id int64) error {
 	return f.Err
+}
+
+// newTestServer wires a Server the same way main.go does, with a logger that
+// discards output. For assertions on the logs themselves see
+// TestHandleErrorLogsInternalErrors.
+func newTestServer(repo *FakeDB) *Server {
+	return &Server{
+		userService: &UserService{userRepo: repo},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
 }
 
 // doRequest sends a request through the same mux the server uses in production.
@@ -81,30 +97,64 @@ func checkJSONError(t *testing.T, body []byte, want string) {
 	}
 }
 
+// checkErrorResponse verifies status and error message for non-success responses.
+func checkErrorResponse(t *testing.T, rec *httptest.ResponseRecorder, body []byte, wantStatus int, wantMsg string) {
+	t.Helper()
+
+	checkStatus(t, rec, wantStatus)
+
+	if rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("expected application/json content type, got %q", rec.Header().Get("Content-Type"))
+	}
+
+	checkJSONError(t, body, wantMsg)
+}
+
 func checkUser(t *testing.T, body []byte, wantID int64, wantName string) {
 	t.Helper()
 
-	var user User
-	if err := json.Unmarshal(body, &user); err != nil {
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("error unmarshalling response body: %v", err)
 	}
 
-	if user.ID != wantID {
-		t.Fatalf("expected user ID %d, got %d", wantID, user.ID)
+	idRaw, ok := resp["id"]
+	if !ok {
+		t.Fatalf(`expected JSON key "id", body: %s`, body)
 	}
 
-	if user.Name != wantName {
-		t.Fatalf("expected user name %q, got %q", wantName, user.Name)
+	nameRaw, ok := resp["name"]
+	if !ok {
+		t.Fatalf(`expected JSON key "name", body: %s`, body)
+	}
+
+	var gotID int64
+	if err := json.Unmarshal(idRaw, &gotID); err != nil {
+		t.Fatalf("error unmarshalling id: %v, body: %s", err, body)
+	}
+
+	if gotID != wantID {
+		t.Fatalf("expected user ID %d, got %d", wantID, gotID)
+	}
+
+	var gotName string
+	if err := json.Unmarshal(nameRaw, &gotName); err != nil {
+		t.Fatalf("error unmarshalling name: %v, body: %s", err, body)
+	}
+
+	if gotName != wantName {
+		t.Fatalf("expected user name %q, got %q", wantName, gotName)
 	}
 }
 
-func TestGetUserByIDHandler(t *testing.T) {
+func TestGetUserHandler(t *testing.T) {
 	type testCase struct {
 		Name               string
 		Path               string
 		User               User
 		DBErr              error
 		ExpectedStatusCode int
+		ExpectedErrMsg     string
 		ExpectedUser       *User
 	}
 
@@ -123,7 +173,7 @@ func TestGetUserByIDHandler(t *testing.T) {
 			User:               User{ID: 2},
 			DBErr:              ErrUserNotFound,
 			ExpectedStatusCode: http.StatusNotFound,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "User not found",
 		},
 		{
 			Name:               "User ID is not a number",
@@ -131,7 +181,7 @@ func TestGetUserByIDHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user ID",
 		},
 		{
 			Name:               "User ID is not positive",
@@ -139,7 +189,7 @@ func TestGetUserByIDHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user ID",
 		},
 		{
 			Name:               "Database error",
@@ -147,26 +197,22 @@ func TestGetUserByIDHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              errors.New("connection refused"),
 			ExpectedStatusCode: http.StatusInternalServerError,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Internal server error",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			srv := &Server{usersRepo: &FakeDB{User: tc.User, Err: tc.DBErr}}
+			srv := newTestServer(&FakeDB{User: tc.User, Err: tc.DBErr})
 
 			rec, body := doRequest(t, srv, http.MethodGet, tc.Path, "")
+
+			if tc.ExpectedStatusCode >= 400 {
+				checkErrorResponse(t, rec, body, tc.ExpectedStatusCode, tc.ExpectedErrMsg)
+				return
+			}
+
 			checkStatus(t, rec, tc.ExpectedStatusCode)
-
-			if tc.ExpectedStatusCode == http.StatusNotFound {
-				checkJSONError(t, body, "User not found")
-				return
-			}
-
-			if tc.ExpectedStatusCode != http.StatusOK {
-				return
-			}
-
 			checkUser(t, body, tc.ExpectedUser.ID, tc.ExpectedUser.Name)
 		})
 	}
@@ -179,6 +225,7 @@ func TestCreateNewUserHandler(t *testing.T) {
 		CreateID           int64
 		DBErr              error
 		ExpectedStatusCode int
+		ExpectedErrMsg     string
 		ExpectedUser       *User
 	}
 
@@ -204,41 +251,43 @@ func TestCreateNewUserHandler(t *testing.T) {
 			Body:               `{"name": "   "}`,
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user name",
 		},
 		{
 			Name:               "Name field is missing",
 			Body:               `{}`,
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user name",
 		},
 		{
 			Name:               "Malformed JSON",
 			Body:               `{"name":`,
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Invalid JSON",
 		},
 		{
 			Name:               "Database error",
 			Body:               `{"name": "Alex"}`,
 			DBErr:              errors.New("connection refused"),
 			ExpectedStatusCode: http.StatusInternalServerError,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Internal server error",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			srv := &Server{usersRepo: &FakeDB{CreateID: tc.CreateID, Err: tc.DBErr}}
+			srv := newTestServer(&FakeDB{CreateID: tc.CreateID, Err: tc.DBErr})
 
 			rec, body := doRequest(t, srv, http.MethodPost, "/users", tc.Body)
-			checkStatus(t, rec, tc.ExpectedStatusCode)
 
-			if tc.ExpectedStatusCode != http.StatusCreated {
+			if tc.ExpectedStatusCode >= 400 {
+				checkErrorResponse(t, rec, body, tc.ExpectedStatusCode, tc.ExpectedErrMsg)
 				return
 			}
+
+			checkStatus(t, rec, tc.ExpectedStatusCode)
 
 			if rec.Header().Get("Content-Type") != "application/json" {
 				t.Fatalf("expected application/json content type, got %q", rec.Header().Get("Content-Type"))
@@ -249,7 +298,7 @@ func TestCreateNewUserHandler(t *testing.T) {
 	}
 }
 
-func TestUpdateUserNameHandler(t *testing.T) {
+func TestUpdateUserHandler(t *testing.T) {
 	type testCase struct {
 		Name               string
 		Path               string
@@ -257,6 +306,7 @@ func TestUpdateUserNameHandler(t *testing.T) {
 		User               User
 		DBErr              error
 		ExpectedStatusCode int
+		ExpectedErrMsg     string
 		ExpectedUser       *User
 	}
 
@@ -286,7 +336,7 @@ func TestUpdateUserNameHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user name",
 		},
 		{
 			Name:               "Malformed JSON",
@@ -295,7 +345,7 @@ func TestUpdateUserNameHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Invalid JSON",
 		},
 		{
 			Name:               "Incorrect user ID",
@@ -304,7 +354,7 @@ func TestUpdateUserNameHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Wrong user ID",
 		},
 		{
 			Name:               "User not found",
@@ -313,7 +363,7 @@ func TestUpdateUserNameHandler(t *testing.T) {
 			User:               User{ID: 9999},
 			DBErr:              ErrUserNotFound,
 			ExpectedStatusCode: http.StatusNotFound,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "User not found",
 		},
 		{
 			Name:               "Database error",
@@ -322,26 +372,22 @@ func TestUpdateUserNameHandler(t *testing.T) {
 			User:               User{ID: 1},
 			DBErr:              errors.New("connection refused"),
 			ExpectedStatusCode: http.StatusInternalServerError,
-			ExpectedUser:       &User{},
+			ExpectedErrMsg:     "Internal server error",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			srv := &Server{usersRepo: &FakeDB{User: tc.User, Err: tc.DBErr}}
+			srv := newTestServer(&FakeDB{User: tc.User, Err: tc.DBErr})
 
 			rec, body := doRequest(t, srv, http.MethodPut, tc.Path, tc.Body)
+
+			if tc.ExpectedStatusCode >= 400 {
+				checkErrorResponse(t, rec, body, tc.ExpectedStatusCode, tc.ExpectedErrMsg)
+				return
+			}
+
 			checkStatus(t, rec, tc.ExpectedStatusCode)
-
-			if tc.ExpectedStatusCode == http.StatusNotFound {
-				checkJSONError(t, body, "User not found")
-				return
-			}
-
-			if tc.ExpectedStatusCode != http.StatusOK {
-				return
-			}
-
 			checkUser(t, body, tc.ExpectedUser.ID, tc.ExpectedUser.Name)
 		})
 	}
@@ -353,6 +399,7 @@ func TestDeleteUserHandler(t *testing.T) {
 		Path               string
 		DBErr              error
 		ExpectedStatusCode int
+		ExpectedErrMsg     string
 	}
 
 	testCases := []testCase{
@@ -367,37 +414,76 @@ func TestDeleteUserHandler(t *testing.T) {
 			Path:               "/users/not-a-number",
 			DBErr:              nil,
 			ExpectedStatusCode: http.StatusBadRequest,
+			ExpectedErrMsg:     "Wrong user ID",
 		},
 		{
 			Name:               "User not found",
 			Path:               "/users/9999",
 			DBErr:              ErrUserNotFound,
 			ExpectedStatusCode: http.StatusNotFound,
+			ExpectedErrMsg:     "User not found",
 		},
 		{
 			Name:               "Database error",
 			Path:               "/users/1",
 			DBErr:              errors.New("connection refused"),
 			ExpectedStatusCode: http.StatusInternalServerError,
+			ExpectedErrMsg:     "Internal server error",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			srv := &Server{usersRepo: &FakeDB{Err: tc.DBErr}}
+			srv := newTestServer(&FakeDB{Err: tc.DBErr})
 
 			rec, body := doRequest(t, srv, http.MethodDelete, tc.Path, "")
-			checkStatus(t, rec, tc.ExpectedStatusCode)
 
-			if tc.ExpectedStatusCode == http.StatusNotFound {
-				checkJSONError(t, body, "User not found")
+			if tc.ExpectedStatusCode >= 400 {
+				checkErrorResponse(t, rec, body, tc.ExpectedStatusCode, tc.ExpectedErrMsg)
 				return
 			}
+
+			checkStatus(t, rec, tc.ExpectedStatusCode)
 
 			// 204 No Content must come without a body
 			if tc.ExpectedStatusCode == http.StatusNoContent && len(body) != 0 {
 				t.Fatalf("expected empty body for 204 response, got %q", string(body))
 			}
 		})
+	}
+}
+
+// TestHandleErrorLogsInternalErrors ensures unexpected errors are visible in
+// the logs as structured JSON with enough request context to debug them.
+func TestHandleErrorLogsInternalErrors(t *testing.T) {
+	var logBuf bytes.Buffer
+
+	srv := &Server{
+		userService: &UserService{userRepo: &FakeDB{Err: errors.New("connection refused")}},
+		logger:      slog.New(slog.NewJSONHandler(&logBuf, nil)),
+	}
+
+	rec, body := doRequest(t, srv, http.MethodGet, "/users/1", "")
+	checkErrorResponse(t, rec, body, http.StatusInternalServerError, "Internal server error")
+
+	var entry map[string]any
+	if err := json.Unmarshal(logBuf.Bytes(), &entry); err != nil {
+		t.Fatalf("expected a JSON log record, got %q: %v", logBuf.String(), err)
+	}
+
+	if entry["level"] != "ERROR" {
+		t.Fatalf("expected log level ERROR, got %v", entry["level"])
+	}
+
+	if entry["msg"] != "Internal server error" {
+		t.Fatalf("expected log msg %q, got %v", "Internal server error", entry["msg"])
+	}
+
+	if entry["error"] != "connection refused" {
+		t.Fatalf("expected original error in the log, got %v", entry["error"])
+	}
+
+	if entry["method"] != http.MethodGet || entry["path"] != "/users/1" {
+		t.Fatalf("expected request context in the log, got method=%v path=%v", entry["method"], entry["path"])
 	}
 }

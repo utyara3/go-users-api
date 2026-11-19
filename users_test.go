@@ -69,27 +69,28 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 	name := fmt.Sprintf("integration-user-%d", time.Now().UnixNano())
 
 	// Create
-	id, err := repo.Create(ctx, name)
+	user, err := repo.Create(ctx, name)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	id := user.ID
 	if id <= 0 {
 		t.Fatalf("expected positive id, got %d", id)
 	}
 	t.Cleanup(func() { cleanupUser(t, pool, id) })
 
-	// GetByID
-	user, err := repo.GetByID(ctx, id)
+	// Get
+	getUser, err := repo.Get(ctx, id)
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
-	if user.ID != id || user.Name != name {
-		t.Fatalf("expected user %d %q, got %d %q", id, name, user.ID, user.Name)
+	if getUser.ID != id || getUser.Name != name {
+		t.Fatalf("expected user %d %q, got %d %q", id, name, getUser.ID, getUser.Name)
 	}
 
 	// Update
 	updatedName := name + "-updated"
-	updated, err := repo.Update(ctx, User{ID: id, Name: updatedName})
+	updated, err := repo.Update(ctx, id, updatedName)
 	if err != nil {
 		t.Fatalf("update user: %v", err)
 	}
@@ -97,12 +98,12 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 		t.Fatalf("expected user %d %q, got %d %q", id, updatedName, updated.ID, updated.Name)
 	}
 
-	user, err = repo.GetByID(ctx, id)
+	getUser, err = repo.Get(ctx, id)
 	if err != nil {
 		t.Fatalf("get updated user: %v", err)
 	}
-	if user.Name != updatedName {
-		t.Fatalf("expected updated name %q, got %q", updatedName, user.Name)
+	if getUser.Name != updatedName {
+		t.Fatalf("expected updated name %q, got %q", updatedName, getUser.Name)
 	}
 
 	// Delete
@@ -111,7 +112,7 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 	}
 
 	// Operations on a deleted user must return ErrUserNotFound
-	if _, err := repo.GetByID(ctx, id); !errors.Is(err, ErrUserNotFound) {
+	if _, err := repo.Get(ctx, id); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound after delete, got: %v", err)
 	}
 
@@ -119,7 +120,7 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 		t.Fatalf("expected ErrUserNotFound on second delete, got: %v", err)
 	}
 
-	if _, err := repo.Update(ctx, User{ID: id, Name: "ghost"}); !errors.Is(err, ErrUserNotFound) {
+	if _, err := repo.Update(ctx, id, "ghost"); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound on update, got: %v", err)
 	}
 }
@@ -130,7 +131,7 @@ func TestIntegration_PostgresUsersGetNotFound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := repo.GetByID(ctx, math.MaxInt64)
+	_, err := repo.Get(ctx, math.MaxInt64)
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound, got: %v", err)
 	}
