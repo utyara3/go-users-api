@@ -22,6 +22,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      # Inside Compose the database is reachable via the `db` service name;
+      # .env stays host-friendly (localhost).
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-secret}@db:5432/${POSTGRES_DB:-app}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
       interval: 5s
