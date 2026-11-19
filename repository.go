@@ -21,7 +21,7 @@ type UserRepository interface {
 }
 
 var (
-	ErrUserNotFound error = errors.New("user not found")
+	ErrUserNotFound = errors.New("user not found")
 
 	// In compile stage check that PostgresUsers realise UserRepository interface
 	_ UserRepository = (*PostgresUsers)(nil)
