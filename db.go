@@ -16,14 +16,13 @@ func NewDB(ctx context.Context) (*pgxpool.Pool, error) {
 	/*
 		postgres:// - connection protocol
 		app:secret - user && password
-		localhost - postgresql adders relative to app
+		localhost - postgresql address relative to app
 		5432 - port
 		/app - db name
 	*/
-	// connString := "postgres://app:secret@localhost:5432/app"
 	connString := os.Getenv("DATABASE_URL")
 	if connString == "" {
-		return nil, fmt.Errorf("%w: %v", ErrDBNotFound, connString)
+		return nil, ErrDBNotFound
 	}
 
 	cfg, err := pgxpool.ParseConfig(connString)
