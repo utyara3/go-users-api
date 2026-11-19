@@ -7,7 +7,7 @@ graceful shutdown, testing and containerization.
 
 ## Stack
 
-- **Go 1.26+**, standard library `net/http` (no framework)
+- **Go 1.27+**, standard library `net/http` (no framework)
 - **PostgreSQL 18** via [`pgx/v5`](https://github.com/jackc/pgx) + `pgxpool`
 - **Docker / Docker Compose** (multi-stage build, healthchecks)
 - **Nginx** as reverse proxy / ingress in front of the Go service
@@ -21,9 +21,12 @@ graceful shutdown, testing and containerization.
 - Go 1.22+ `ServeMux` routing with method + path patterns (`GET /users/{id}`)
 - `UserRepository` interface — HTTP layer is tested against a fake repository,
   PostgreSQL implementation is covered by integration tests
-- Sentinel errors (`ErrUserNotFound`, `ErrDBNotFound`) with `errors.Is` and `%w`
-  wrapping, so `pgx.ErrNoRows` never leaks into the HTTP layer
-- 3-second `context` timeouts on database calls
+- Sentinel errors (`ErrUserNotFound`, `ErrWrongUserID`, `ErrWrongUserName`,
+  `ErrInvalidJSON`, `ErrDBNotFound`) with `errors.Is` and `%w` wrapping, so
+  `pgx.ErrNoRows` never leaks into the HTTP layer
+- One error-mapping point: every handler failure goes through `handleError`,
+  which maps each sentinel to its 4xx status and logs everything else as a 5xx
+- Structured JSON logs (`slog`), level set via `LOG_LEVEL` (default `info`)
 - Graceful shutdown on `SIGINT`/`SIGTERM` with a 5-second drain window
 - Uniform JSON responses; errors are always `{"error": "..."}`
 - Multi-stage Docker build (static binary, `CGO_ENABLED=0`, Alpine-based image,
@@ -68,34 +71,41 @@ http DELETE :8080/users/1
 
 # errors are always JSON
 http GET :8080/users/abc
-# => {"error":"Invalid user ID"}  (400)
+# => {"error":"Wrong user ID"}  (400)
 ```
 
 ## Project structure
 
 ```text
 .
-├── main.go          # wiring: db pool, routes, server, graceful shutdown
-├── server.go        # HTTP handlers, request validation, JSON responses
-├── users.go         # UserRepository interface + Postgres implementation
-├── db.go            # pgxpool creation from DATABASE_URL
-├── init.sql         # schema, mounted into the postgres container
-├── server_test.go   # handler tests with a fake repository (httptest)
-├── users_test.go    # integration tests against real Postgres
-├── db_test.go       # connection setup tests
-├── Dockerfile       # multi-stage build, non-root user
+├── main.go            # wiring: db pool, service, routes, graceful shutdown
+├── handlers.go        # HTTP layer: ServeMux routes, handlers, wire types
+├── service.go         # UserService: validation + business rules
+├── repository.go      # UserRepository interface + PostgreSQL implementation
+├── db.go              # pgxpool creation from DATABASE_URL
+├── logger.go          # slog JSON logger setup
+├── init.sql           # schema, mounted into the postgres container
+├── server_test.go     # handler tests with a fake repository (httptest)
+├── users_test.go      # integration tests against real Postgres
+├── db_test.go         # connection setup tests
+├── logger_test.go     # LOG_LEVEL parsing tests
+├── Dockerfile         # multi-stage build, non-root user
 ├── .dockerignore
 ├── .env.example
 ├── docker-compose.yml
 ├── nginx/
-│   └── nginx.conf   # reverse proxy config (mounted into nginx container)
-├── flake.nix        # dev shell: go, gopls, gofumpt, golangci-lint, httpie
+│   └── nginx.conf     # reverse proxy config (mounted into nginx container)
+├── flake.nix          # dev shell: go, gopls, gofumpt, golangci-lint, httpie
 └── Makefile
 ```
 
+Layers: `handlers.go` → `UserService` (interface in `service.go`) →
+`UserRepository` (interface in `repository.go`) → PostgreSQL. HTTP handlers
+never see the database, the service never sees HTTP.
+
 ## Getting started
 
-**Prerequisites:** Go 1.26+, Docker. Optional: Nix with `direnv` (`use flake`)
+**Prerequisites:** Go 1.27+, Docker. Optional: Nix with `direnv` (`use flake`)
 for a ready-made dev shell.
 
 ```sh
@@ -134,6 +144,17 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ```
 
+### Environment variables
+
+All of them live in `.env` (see `.env.example`); Compose passes them to the
+`api` service via `env_file`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | — (required, app fails fast without it) | Postgres connection string (`db.go`) |
+| `TEST_DATABASE_URL` | — | Connection string for integration tests; they skip without it |
+| `LOG_LEVEL` | `info` | `slog` level: `debug`, `info`, `warn`, `error` (`logger.go`); invalid values fall back to `info` |
+
 ## Tests
 
 ```sh
@@ -143,7 +164,9 @@ make test-integration # the same, but runs integration tests too
 
 Unit tests cover every handler through the real router with a fake repository:
 happy paths, validation (bad id, empty name, malformed JSON) and mapping of
-repository errors to status codes.
+repository errors to status codes. Two more guarantees are pinned by tests:
+5xx errors end up in the structured logs with the request context, and
+`LOG_LEVEL` controls the logger level.
 
 Integration tests live in `users_test.go`, use a real PostgreSQL and are
 skipped unless the connection string is provided:
@@ -169,12 +192,17 @@ missing user return `ErrUserNotFound`.
 
 ## Design decisions
 
-- **Interface + fake repository.** Handlers depend on `UserRepository`, not on
-  PostgreSQL, so HTTP behaviour is testable without a database. Asserted at
-  compile time: `_ UserRepository = (*PostgresUsers)(nil)`.
-- **Sentinel error instead of `pgx.ErrNoRows`.** The repository translates
-  driver-specific errors into `ErrUserNotFound`; handlers map it to `404` with
-  `errors.Is`, everything else is wrapped with `%w` and logged as `500`.
+- **Interfaces between layers.** Handlers depend on a `userService` interface,
+  the service depends on `UserRepository` — so the HTTP layer is tested against
+  a fake repository (through the real service), and the service can be unit
+  tested without a database. PostgreSQL conformance is asserted at compile
+  time: `_ UserRepository = (*PostgresUsers)(nil)`.
+- **Sentinel errors, one mapping point.** The repository translates
+  driver-specific errors into `ErrUserNotFound`; validation failures are
+  `ErrWrongUserID`/`ErrWrongUserName`, decode failures are `ErrInvalidJSON`.
+  Every handler routes errors through `handleError`, which maps each sentinel
+  to its 4xx status with `errors.Is` and logs everything else as a structured
+  5xx entry with the original error, method and path.
 - **Stdlib routing, no framework.** Go 1.22+ `ServeMux` patterns are enough and
   keep the dependency tree small.
 - **`RETURNING` instead of extra round-trips.** `UPDATE`/`DELETE` use
