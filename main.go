@@ -33,7 +33,9 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 
 	usersRepo := &PostgresUsers{db: pool}
-	srv := &Server{usersRepo: usersRepo}
+	usersService := &UserService{userRepo: usersRepo}
+
+	srv := &Server{userService: usersService}
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:8080",
