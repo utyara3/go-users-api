@@ -78,30 +78,41 @@ http GET :8080/users/abc
 
 ```text
 .
-├── main.go            # wiring: db pool, service, routes, graceful shutdown
-├── handlers.go        # HTTP layer: ServeMux routes, handlers, wire types
-├── service.go         # UserService: validation + business rules
-├── repository.go      # UserRepository interface + PostgreSQL implementation
-├── db.go              # pgxpool creation from DATABASE_URL
-├── logger.go          # slog JSON logger setup
-├── init.sql           # schema, mounted into the postgres container
-├── server_test.go     # handler tests with a fake repository (httptest)
-├── users_test.go      # integration tests against real Postgres
-├── db_test.go         # connection setup tests
-├── logger_test.go     # LOG_LEVEL parsing tests
-├── Dockerfile         # multi-stage build, non-root user
+├── cmd/
+│   └── api/                # entrypoint
+│       ├── main.go         # wiring: pool, service, routes, graceful shutdown
+│       ├── logger.go       # slog JSON logger, LOG_LEVEL parsing
+│       └── logger_test.go
+├── internal/               # private packages: nothing outside may import them
+│   ├── httpapi/            # HTTP layer
+│   │   ├── handlers.go     # ServeMux routes, handlers, error mapping
+│   │   └── handlers_test.go # tests in package httpapi_test
+│   ├── user/               # domain layer, no HTTP or SQL knowledge
+│   │   ├── user.go         # User model, ErrUserNotFound
+│   │   ├── service.go      # UserService: validation + business rules
+│   │   └── repository.go   # UserRepository interface
+│   ├── postgres/           # PostgreSQL adapter
+│   │   ├── pool.go         # pgxpool creation from DATABASE_URL
+│   │   ├── user_repository.go # UserRepository implementation
+│   │   ├── pool_test.go    # tests in package postgres_test
+│   │   └── users_test.go   # integration tests against real Postgres
+├── init.sql                # schema, mounted into the postgres container
+├── Dockerfile              # multi-stage build, non-root user
 ├── .dockerignore
 ├── .env.example
 ├── docker-compose.yml
 ├── nginx/
-│   └── nginx.conf     # reverse proxy config (mounted into nginx container)
-├── flake.nix          # dev shell: go, gopls, gofumpt, golangci-lint, httpie
+│   └── nginx.conf          # reverse proxy config (mounted into nginx container)
+├── flake.nix               # dev shell: go, gopls, gofumpt, golangci-lint, httpie
 └── Makefile
 ```
 
-Layers: `handlers.go` → `UserService` (interface in `service.go`) →
-`UserRepository` (interface in `repository.go`) → PostgreSQL. HTTP handlers
-never see the database, the service never sees HTTP.
+Layers: `internal/httpapi` → `internal/user` (`UserService`, validation) →
+`UserRepository` interface → `internal/postgres` (PostgreSQL implementation).
+Dependencies point inward: the HTTP layer knows the service, the service knows
+only the repository interface, and the repository translates SQL errors into
+domain errors. HTTP handlers never see the database, the service never sees
+HTTP. `cmd/api` is the single place that wires all three together.
 
 ## Getting started
 
@@ -127,8 +138,8 @@ docker compose up --build
 
 ### Database URL, two contexts
 
-The app only reads `DATABASE_URL` from the environment (see `db.go`), so the
-value depends on where it runs:
+The app only reads `DATABASE_URL` from the environment (see
+`internal/postgres/pool.go`), so the value depends on where it runs:
 
 - **On the host** (`make run`, `make test-integration`) — `localhost:5432`,
   as shipped in `.env.example`.
@@ -151,9 +162,9 @@ All of them live in `.env` (see `.env.example`); Compose passes them to the
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | — (required, app fails fast without it) | Postgres connection string (`db.go`) |
+| `DATABASE_URL` | — (required, app fails fast without it) | Postgres connection string (`internal/postgres/pool.go`) |
 | `TEST_DATABASE_URL` | — | Connection string for integration tests; they skip without it |
-| `LOG_LEVEL` | `info` | `slog` level: `debug`, `info`, `warn`, `error` (`logger.go`); invalid values fall back to `info` |
+| `LOG_LEVEL` | `info` | `slog` level: `debug`, `info`, `warn`, `error` (`cmd/api/logger.go`); invalid values fall back to `info` |
 
 ## Tests
 
@@ -168,8 +179,15 @@ repository errors to status codes. Two more guarantees are pinned by tests:
 5xx errors end up in the structured logs with the request context, and
 `LOG_LEVEL` controls the logger level.
 
-Integration tests live in `users_test.go`, use a real PostgreSQL and are
-skipped unless the connection string is provided:
+Unit tests live in **external test packages** — `internal/httpapi` is tested
+as `package httpapi_test`, `internal/postgres` as `package postgres_test`.
+Such a test imports the package under test by its real path and can touch only
+its exported API, i.e. exactly what any other consumer sees. The exception is
+`cmd/api/logger_test.go` (`package main`): it covers unexported helpers
+(`newLogger`, `logLevelFromEnv`), which an external package cannot reach.
+
+Integration tests live in `internal/postgres/users_test.go`, use a real
+PostgreSQL and are skipped unless the connection string is provided:
 
 ```sh
 docker compose up -d db
@@ -192,11 +210,15 @@ missing user return `ErrUserNotFound`.
 
 ## Design decisions
 
-- **Interfaces between layers.** Handlers depend on a `userService` interface,
-  the service depends on `UserRepository` — so the HTTP layer is tested against
-  a fake repository (through the real service), and the service can be unit
-  tested without a database. PostgreSQL conformance is asserted at compile
-  time: `_ UserRepository = (*PostgresUsers)(nil)`.
+- **Interfaces between layers.** The service depends on a `UserRepository`
+  interface declared on the consumer side in `internal/user`, so the HTTP
+  layer is tested against a fake repository (through the real service), and
+  the service can be unit tested without a database. PostgreSQL conformance
+  is asserted at compile time:
+  `_ user.UserRepository = (*postgres.PostgresUsers)(nil)`.
+  The HTTP layer, in turn, talks to the concrete `UserService` and gets it
+  through the `httpapi.NewServer` constructor; `Server` keeps its fields
+  unexported, so nothing can rewire it from the outside.
 - **Sentinel errors, one mapping point.** The repository translates
   driver-specific errors into `ErrUserNotFound`; validation failures are
   `ErrWrongUserID`/`ErrWrongUserName`, decode failures are `ErrInvalidJSON`.
