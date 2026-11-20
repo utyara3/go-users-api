@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /app/main .
+RUN CGO_ENABLED=0 go build -o /app/main ./cmd/api
 
 # 2nd stage: binary file
 FROM alpine:3.22

@@ -16,10 +16,10 @@ test-integration: vet
 	go test -v -race -run Integration ./...
 
 build: vet
-	go build
+	go build -o go-users-api ./cmd/api
 
 run: vet
-	go run .
+	go run ./cmd/api
 
 prod: test
-	go build
+	go build -o go-users-api ./cmd/api

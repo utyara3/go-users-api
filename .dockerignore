@@ -1,11 +1,22 @@
+# VCS / local env
 .git
 .gitignore
+.direnv/
+.envrc
 .env
 .env.*
+
+# Build artifacts
+go-users-api
 main
 *.test
+
+# Dev and deploy files that the image does not need
+Makefile
+docker-compose.yml
+init.sql
+nginx/
 postgres_data/
 README.md
 flake.nix
 flake.lock
-.direnv/
