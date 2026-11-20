@@ -1,4 +1,4 @@
-package main
+package postgres_test
 
 import (
 	"context"
@@ -10,12 +10,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/utyara3/go-users-api/internal/postgres"
+	"github.com/utyara3/go-users-api/internal/user"
 )
 
 /*
 Integration tests for the real Postgres repository.
 */
-func newIntegrationRepo(t *testing.T) (*PostgresUsers, *pgxpool.Pool) {
+func newIntegrationRepo(t *testing.T) (*postgres.PostgresUsers, *pgxpool.Pool) {
 	t.Helper()
 
 	connString := os.Getenv("TEST_DATABASE_URL")
@@ -46,7 +49,7 @@ func newIntegrationRepo(t *testing.T) (*PostgresUsers, *pgxpool.Pool) {
 		t.Fatalf("create users table: %v", err)
 	}
 
-	return &PostgresUsers{db: pool}, pool
+	return postgres.NewUserRepository(pool), pool
 }
 
 func cleanupUser(t *testing.T, pool *pgxpool.Pool, id int64) {
@@ -69,11 +72,11 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 	name := fmt.Sprintf("integration-user-%d", time.Now().UnixNano())
 
 	// Create
-	user, err := repo.Create(ctx, name)
+	created, err := repo.Create(ctx, name)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	id := user.ID
+	id := created.ID
 	if id <= 0 {
 		t.Fatalf("expected positive id, got %d", id)
 	}
@@ -112,15 +115,15 @@ func TestIntegration_PostgresUsersCRUD(t *testing.T) {
 	}
 
 	// Operations on a deleted user must return ErrUserNotFound
-	if _, err := repo.Get(ctx, id); !errors.Is(err, ErrUserNotFound) {
+	if _, err := repo.Get(ctx, id); !errors.Is(err, user.ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound after delete, got: %v", err)
 	}
 
-	if err := repo.Delete(ctx, id); !errors.Is(err, ErrUserNotFound) {
+	if err := repo.Delete(ctx, id); !errors.Is(err, user.ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound on second delete, got: %v", err)
 	}
 
-	if _, err := repo.Update(ctx, id, "ghost"); !errors.Is(err, ErrUserNotFound) {
+	if _, err := repo.Update(ctx, id, "ghost"); !errors.Is(err, user.ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound on update, got: %v", err)
 	}
 }
@@ -132,7 +135,7 @@ func TestIntegration_PostgresUsersGetNotFound(t *testing.T) {
 	defer cancel()
 
 	_, err := repo.Get(ctx, math.MaxInt64)
-	if !errors.Is(err, ErrUserNotFound) {
+	if !errors.Is(err, user.ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound, got: %v", err)
 	}
 }

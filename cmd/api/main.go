@@ -10,6 +10,10 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/utyara3/go-users-api/internal/httpapi"
+	"github.com/utyara3/go-users-api/internal/postgres"
+	"github.com/utyara3/go-users-api/internal/user"
 )
 
 func main() {
@@ -26,20 +30,20 @@ func run(logger *slog.Logger) error {
 	defer stop()
 
 	ctx := context.Background()
-	pool, err := NewDB(ctx)
+	dbPool, err := postgres.NewDB(ctx)
 	if err != nil {
 		return fmt.Errorf("initialize database pool: %w", err)
 	}
-	defer pool.Close()
+	defer dbPool.Close()
 
-	usersRepo := &PostgresUsers{db: pool}
-	usersService := &UserService{userRepo: usersRepo}
+	usersRepo := postgres.NewUserRepository(dbPool)
+	usersService := user.NewUserService(usersRepo)
 
-	srv := &Server{userService: usersService, logger: logger}
+	srv := httpapi.NewServer(usersService, logger)
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:8080",
-		Handler:           newMux(srv),
+		Handler:           httpapi.NewMux(srv),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
